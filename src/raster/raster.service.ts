@@ -1,10 +1,15 @@
 import { ConflictException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import { ConflictException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import * as unzipper from 'unzipper';
 import * as fs from 'fs';
 import * as path from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Raster } from './entities/raster.entity';
 import { Repository } from 'typeorm';
+import * as WKT from 'terraformer-wkt-parser';
+import * as gdal from 'gdal-async';
+
+
 import * as WKT from 'terraformer-wkt-parser';
 import * as gdal from 'gdal-async';
 
@@ -69,6 +74,20 @@ export class RasterService {
 
     // Extraer bbox y crs
     const { geometry: bboxGeoJSON, crs } = await this.getBoundingBox(rasterFilePath);
+    // Extraer bbox y crs
+    const { geometry: bboxGeoJSON, crs } = await this.getBoundingBox(rasterFilePath);
+
+    if (!bboxGeoJSON || typeof bboxGeoJSON !== 'object' || !bboxGeoJSON.type) {
+      throw new InternalServerErrorException('BBox GeoJSON inválido o no contiene la propiedad "type"');
+    }
+
+    // Convertir GeoJSON a WKT
+    let bboxWKT: string;
+    try {
+      bboxWKT = WKT.convert(bboxGeoJSON);
+    } catch (error) {
+      throw new InternalServerErrorException('Error convirtiendo bbox GeoJSON a WKT: ' + error.message);
+    }
 
     if (!bboxGeoJSON || typeof bboxGeoJSON !== 'object' || !bboxGeoJSON.type) {
       throw new InternalServerErrorException('BBox GeoJSON inválido o no contiene la propiedad "type"');
@@ -85,6 +104,8 @@ export class RasterService {
     const raster = this.rasterRepo.create({
       filename: path.basename(rasterFilePath),
       path: rasterFilePath,
+      bbox: bboxWKT,
+      crs,
       bbox: bboxWKT,
       crs,
     });
@@ -114,6 +135,9 @@ export class RasterService {
 
     return featureCollection;
   }
+  async rasterExistsByName(filename: string): Promise<{ exists: boolean }> {
+    const count = await this.rasterRepo.count({ where: { filename } });
+    return { exists: count > 0 };
   async rasterExistsByName(filename: string): Promise<{ exists: boolean }> {
     const count = await this.rasterRepo.count({ where: { filename } });
     return { exists: count > 0 };
