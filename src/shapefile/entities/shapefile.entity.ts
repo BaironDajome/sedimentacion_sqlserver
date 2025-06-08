@@ -6,21 +6,20 @@ export class Shapefile {
   id: string;
 
   @Column({ type: 'geometry', spatialFeatureType: 'Geometry', srid: 4326 })
-  geometry: any;
+  geometry: string; 
 
-@Column({
-  type: 'nvarchar',
-  length: 'max',
-  nullable: true, // o false, si lo necesitas obligatorio
-  transformer: {
-    to: (value: any) => JSON.stringify(value),
-    from: (value: string) => value ? JSON.parse(value) : null,
-  },
-})
-properties: any;
-
+  @Column({
+    type: 'nvarchar',
+    length: 'max',
+    nullable: true, // o false, si lo necesitas obligatorio
+    transformer: {
+      to: (value: any) => JSON.stringify(value),
+      from: (value: string) => value ? JSON.parse(value) : null,
+    },
+  })
+  properties: any;
 
   @Column()
-  filename: string; 
+  filename: string;
 }
 
