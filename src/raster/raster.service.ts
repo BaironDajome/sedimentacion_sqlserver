@@ -1,11 +1,14 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import * as unzipper from 'unzipper';
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Raster } from './entities/raster.entity';
 import { Repository } from 'typeorm';
+import * as WKT from 'terraformer-wkt-parser';
+import * as gdal from 'gdal-async';
+
+
 
 @Injectable()
 export class RasterService {
@@ -17,24 +20,18 @@ export class RasterService {
   async saveRaster(file: Express.Multer.File): Promise<Raster> {
     const uploadDir = 'uploads/rasters';
 
-    // Crear carpeta si no existe
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
 
-    // Guardar el archivo ZIP en disco
     const zipFilePath = path.join(uploadDir, file.originalname);
     fs.writeFileSync(zipFilePath, file.buffer);
 
-    // Carpeta temporal para extraer el ZIP (puede ser con un nombre basado en el archivo)
     const extractDir = path.join(uploadDir, path.parse(file.originalname).name);
-
-    // Crear carpeta para extraer ZIP
     if (!fs.existsSync(extractDir)) {
       fs.mkdirSync(extractDir, { recursive: true });
     }
 
-    // Extraer ZIP
     await new Promise<void>((resolve, reject) => {
       fs.createReadStream(zipFilePath)
         .pipe(unzipper.Extract({ path: extractDir }))
@@ -42,7 +39,6 @@ export class RasterService {
         .on('error', reject);
     });
 
-    // Función para buscar recursivamente el archivo raster
     function findRasterFile(dir: string): string | null {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
 
@@ -61,7 +57,6 @@ export class RasterService {
       return null;
     }
 
-    // Buscar archivo raster válido en la carpeta extraída
     const rasterFilePath = findRasterFile(extractDir);
     if (!rasterFilePath) {
       throw new Error('No se encontró archivo raster válido dentro del ZIP.');
@@ -72,15 +67,26 @@ export class RasterService {
       throw new ConflictException(`El archivo ${file.originalname} ya existe.`);
     }
 
-    // Extraer bbox con gdalinfo
-    const bbox = await this.getBoundingBox(rasterFilePath);
+    // Extraer bbox y crs
+    const { geometry: bboxGeoJSON, crs } = await this.getBoundingBox(rasterFilePath);
 
-    // Guardar en la base de datos (asumiendo que tienes un repositorio rasterRepo)
+    if (!bboxGeoJSON || typeof bboxGeoJSON !== 'object' || !bboxGeoJSON.type) {
+      throw new InternalServerErrorException('BBox GeoJSON inválido o no contiene la propiedad "type"');
+    }
+
+    // Convertir GeoJSON a WKT
+    let bboxWKT: string;
+    try {
+      bboxWKT = WKT.convert(bboxGeoJSON);
+    } catch (error) {
+      throw new InternalServerErrorException('Error convirtiendo bbox GeoJSON a WKT: ' + error.message);
+    }
+
     const raster = this.rasterRepo.create({
       filename: path.basename(rasterFilePath),
       path: rasterFilePath,
-      bbox,
-      crs: 'EPSG:4326',
+      bbox: bboxWKT,
+      crs,
     });
 
     return this.rasterRepo.save(raster);
@@ -108,36 +114,41 @@ export class RasterService {
 
     return featureCollection;
   }
-  async rasterExistsByName(nombre: string): Promise<{ exists: boolean }> {
-    const raster = await this.rasterRepo.findOne({
-      where: { filename: nombre },
-    });
-
-    return { exists: !!raster };
+  async rasterExistsByName(filename: string): Promise<{ exists: boolean }> {
+    const count = await this.rasterRepo.count({ where: { filename } });
+    return { exists: count > 0 };
   }
 
-  private getBoundingBox(filepath: string): Promise<any> {
-    return new Promise((resolve, reject) => {
-      exec(`gdalinfo -json "${filepath}"`, (error, stdout) => {
-        if (error) return reject(error);
+async getBoundingBox(filePath: string): Promise<{ geometry: any; crs: string }> {
+  const dataset = gdal.open(filePath);
 
-        const info = JSON.parse(stdout);
-        const [xmin, ymax] = info.cornerCoordinates.upperLeft;
-        const [xmax, ymin] = info.cornerCoordinates.lowerRight;
-
-        const polygonGeoJSON = {
-          type: "Polygon",
-          coordinates: [[
-            [xmin, ymin],
-            [xmin, ymax],
-            [xmax, ymax],
-            [xmax, ymin],
-            [xmin, ymin]
-          ]]
-        };
-
-        resolve(polygonGeoJSON);
-      });
-    });
+  const geoTransform = dataset.geoTransform;
+  if (!geoTransform) {
+    throw new Error('El archivo no tiene información de georreferenciación (GeoTransform).');
   }
+
+  const xMin = geoTransform[0];
+  const yMax = geoTransform[3];
+  const pixelWidth = geoTransform[1];
+  const pixelHeight = geoTransform[5];
+
+  const xMax = xMin + (dataset.rasterSize.x * pixelWidth);
+  const yMin = yMax + (dataset.rasterSize.y * pixelHeight);
+
+  // Crear polígono del bbox
+  const ring = new gdal.LinearRing();
+  ring.points.add(new gdal.Point(xMin, yMin));
+  ring.points.add(new gdal.Point(xMin, yMax));
+  ring.points.add(new gdal.Point(xMax, yMax));
+  ring.points.add(new gdal.Point(xMax, yMin));
+  ring.points.add(new gdal.Point(xMin, yMin)); // Cierra el polígono
+
+  const polygon = new gdal.Polygon();
+  polygon.rings.add(ring);
+
+  const geometry = polygon.toObject(); // GeoJSON
+  const crs = dataset.srs?.toWKT() || 'EPSG:4326'; // Intenta obtener CRS, o por defecto EPSG:4326
+
+  return { geometry, crs };
+}
 }

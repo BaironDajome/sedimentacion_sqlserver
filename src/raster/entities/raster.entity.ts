@@ -1,4 +1,5 @@
-import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+
 @Entity()
 export class Raster {
     @PrimaryGeneratedColumn('uuid')
@@ -10,10 +11,9 @@ export class Raster {
     @Column()
     path: string;
 
-    @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 4326 })
-    bbox: any;
+    @Column({ type: 'geometry', spatialFeatureType: 'Geometry', srid: 4326 })
+    bbox: string;
 
-    @Column()
+    @Column({ type: 'nvarchar', length: 'max' })
     crs: string;
 }
-
