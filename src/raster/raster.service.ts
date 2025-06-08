@@ -119,36 +119,36 @@ export class RasterService {
     return { exists: count > 0 };
   }
 
-async getBoundingBox(filePath: string): Promise<{ geometry: any; crs: string }> {
-  const dataset = gdal.open(filePath);
+  async getBoundingBox(filePath: string): Promise<{ geometry: any; crs: string }> {
+    const dataset = gdal.open(filePath);
 
-  const geoTransform = dataset.geoTransform;
-  if (!geoTransform) {
-    throw new Error('El archivo no tiene información de georreferenciación (GeoTransform).');
+    const geoTransform = dataset.geoTransform;
+    if (!geoTransform) {
+      throw new Error('El archivo no tiene información de georreferenciación (GeoTransform).');
+    }
+
+    const xMin = geoTransform[0];
+    const yMax = geoTransform[3];
+    const pixelWidth = geoTransform[1];
+    const pixelHeight = geoTransform[5];
+
+    const xMax = xMin + (dataset.rasterSize.x * pixelWidth);
+    const yMin = yMax + (dataset.rasterSize.y * pixelHeight);
+
+    // Crear polígono del bbox
+    const ring = new gdal.LinearRing();
+    ring.points.add(new gdal.Point(xMin, yMin));
+    ring.points.add(new gdal.Point(xMin, yMax));
+    ring.points.add(new gdal.Point(xMax, yMax));
+    ring.points.add(new gdal.Point(xMax, yMin));
+    ring.points.add(new gdal.Point(xMin, yMin)); // Cierra el polígono
+
+    const polygon = new gdal.Polygon();
+    polygon.rings.add(ring);
+
+    const geometry = polygon.toObject(); // GeoJSON
+    const crs = dataset.srs?.toWKT() || 'EPSG:4326'; // Intenta obtener CRS, o por defecto EPSG:4326
+
+    return { geometry, crs };
   }
-
-  const xMin = geoTransform[0];
-  const yMax = geoTransform[3];
-  const pixelWidth = geoTransform[1];
-  const pixelHeight = geoTransform[5];
-
-  const xMax = xMin + (dataset.rasterSize.x * pixelWidth);
-  const yMin = yMax + (dataset.rasterSize.y * pixelHeight);
-
-  // Crear polígono del bbox
-  const ring = new gdal.LinearRing();
-  ring.points.add(new gdal.Point(xMin, yMin));
-  ring.points.add(new gdal.Point(xMin, yMax));
-  ring.points.add(new gdal.Point(xMax, yMax));
-  ring.points.add(new gdal.Point(xMax, yMin));
-  ring.points.add(new gdal.Point(xMin, yMin)); // Cierra el polígono
-
-  const polygon = new gdal.Polygon();
-  polygon.rings.add(ring);
-
-  const geometry = polygon.toObject(); // GeoJSON
-  const crs = dataset.srs?.toWKT() || 'EPSG:4326'; // Intenta obtener CRS, o por defecto EPSG:4326
-
-  return { geometry, crs };
-}
 }
